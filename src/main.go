@@ -1,8 +1,6 @@
 package main
 
-import (
-	"github.com/gin-gonic/gin"
-)
+import "github.com/gin-gonic/gin"
 
 const secretKey string = "secret-key-from-env-var"
 
