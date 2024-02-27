@@ -42,38 +42,44 @@ curl --location 'http://localhost:8080/refresh' \
 Функция по генерации соответствующего типа токена:
 ```go
 func GenerateAccessToken(parentHash []byte, userID string) string {
-	token := jwt.NewWithClaims(jwt.SigningMethodHS512, &TokenClaims{
-		RFTokenHash: parentHash,
-		UserID:      userID,
-	})
+    token := jwt.NewWithClaims(jwt.SigningMethodHS512, &TokenClaims{
+        RFTokenHash: parentHash,
+        UserID:      userID,
+    })
 
-	tokenString, err := token.SignedString([]byte(secretKey))
-	if err != nil {
-		panic(err)
-	}
+    tokenString, err := token.SignedString([]byte(secretKey))
+    if err != nil {
+        panic(err)
+    }
 
-	return tokenString
+    return tokenString
 }
 ```
 
 Access токен не хранится в базе данных.
 
-### 2. Refresh токен тип произвольный, формат передачи base64, хранится в базеисключительно в виде bcrypt хеша, должен быть защищен от изменения настороне клиента и попыток повторного использования.
+Что касается базы данных: в ней хранится 1 коллекция <b>users</b>, которая хранит документы со структурой <b>id, rf_token_hash</b>:
 
-В качестве Refsresh токена используется случаный набор 32-ух байт. Ниже представлена функция для генерации токена и его хеширования в bcrypt:
+![alt text](image-1.png)
+
+В реальных проектах пользователи обычно могут аутентифицироваться с нескольких устройств, поэтому хеши потребовалось бы хранить в отдельной коллекции и сопоставлять их с <b>device_id</b>, но в данном случае это не имеет смысла и все хранится в одной коллекции <b>users</b>.
+
+### 2. Refresh токен тип произвольный, формат передачи base64, хранится в базе исключительно в виде bcrypt хеша, должен быть защищен от изменения на стороне клиента и попыток повторного использования.
+
+В качестве Refsresh токена используется случайный набор 32-ух байт. Ниже представлена функция для генерации токена и его хеширования в bcrypt:
 ```go
 func GenerateRFTokenWithHash() ([]byte, []byte) {
-	randomBytes := make([]byte, 32)
-	if _, err := rand.Read(randomBytes); err != nil {
-		panic(err)
-	}
+    randomBytes := make([]byte, 32)
+    if _, err := rand.Read(randomBytes); err != nil {
+        panic(err)
+    }
 
-	refreshTokenHash, err := bcrypt.GenerateFromPassword(randomBytes, bcrypt.DefaultCost)
-	if err != nil {
-		panic(err)
-	}
+    refreshTokenHash, err := bcrypt.GenerateFromPassword(randomBytes, bcrypt.DefaultCost)
+    if err != nil {
+        panic(err)
+    }
 
-	return randomBytes, refreshTokenHash
+    return randomBytes, refreshTokenHash
 }
 ```
 
@@ -81,24 +87,24 @@ func GenerateRFTokenWithHash() ([]byte, []byte) {
 ```go
 // Маршрут 1. Ответ предоставляется в виде JSON.
 func GetTokens(c *gin.Context) {
-	userID := c.Query("userID")
-	c.IndentedJSON(200, GenerateTokens(userID))
+    userID := c.Query("userID")
+    c.IndentedJSON(200, GenerateTokens(userID))
 }
 ```
 
 Хеш токена хранится в базе данных так же в формате base64, но уже с явным преобразованием в коде. Функция для обновления хеша в БД и преобразования его в формат base64:
 ```go
 func UpdateUserRFTokenHash(id string, newHash []byte) {
-	coll := client.Database("mydb").Collection("users")
+    coll := client.Database("mydb").Collection("users")
 
-	res := base64.StdEncoding.EncodeToString(newHash)
-	update := bson.D{{Key: "$set", Value: bson.D{{Key: "rf_token_hash", Value: res}}}}
-	filter := bson.D{{Key: id}}
+    res := base64.StdEncoding.EncodeToString(newHash)
+    update := bson.D{{Key: "$set", Value: bson.D{{Key: "rf_token_hash", Value: res}}}}
+    filter := bson.D{{Key: id}}
 
-	_, err := coll.UpdateOne(context.TODO(), filter, update)
-	if err != nil {
-		panic(err)
-	}
+    _, err := coll.UpdateOne(context.TODO(), filter, update)
+    if err != nil {
+        panic(err)
+    }
 }
 ``` 
 
@@ -106,36 +112,38 @@ func UpdateUserRFTokenHash(id string, newHash []byte) {
 
 ### 3. Access, Refresh токены обоюдно связаны, Refresh операцию для Access токена можно выполнить только тем Refresh токеном который был выдан вместе с ним.
 
-Свазанность достигается за счет указания bcrypt хеша Refresh токена в полезной нагрузке Access токена. Сервер, после проверки подлинности Access токена, также проверяет, что хеш в payload совпадает с хешем Refresh токена, который был отправлен вместе с ним. 
+Связанность достигается за счет указания bcrypt хеша Refresh токена в полезной нагрузке Access токена. Сервер, после проверки подлинности Access токена, также проверяет, что хеш в payload совпадает с хешем Refresh токена, который был отправлен вместе с ним. 
 
 ```go
 func RefreshTokens(c *gin.Context) {
-	var tokensPair TokensPair
-	if err := c.BindJSON(&tokensPair); err != nil {
-		c.JSON(401, gin.H{"error": "invalid JSON or token structure"})
-		return
-	}
+    var tokensPair TokensPair
+    if err := c.BindJSON(&tokensPair); err != nil {
+        c.JSON(401, gin.H{"error": "invalid JSON or token structure"})
+        return
+    }
 
-	tokenClaims := &TokenClaims{}
-	_, err := jwt.ParseWithClaims(tokensPair.AccessToken, tokenClaims, func(token *jwt.Token) (interface{}, error) {
-		return []byte(secretKey), nil
-	})
+    tokenClaims := &TokenClaims{}
+    _, err := jwt.ParseWithClaims(tokensPair.AccessToken, tokenClaims, func(token *jwt.Token) (interface{}, error) {
+        return []byte(secretKey), nil
+    })
 
-    // Проверка имеет следующую логику:
+    // Алгоритм проверки следующий:
     // 1. Проверка подлинности Access токена
-    // 2. Сравнение хеша из payload с присланным Refresh токеном
+    // 2. Сопоставление хеша из payload с присланным Refresh токеном
     // 3. Проверка актуальности Refresh токена
-	if err != nil {
-		c.JSON(401, gin.H{"error": "invalid access token"})
-		return
-	} else if bcrypt.CompareHashAndPassword(tokenClaims.RFTokenHash, tokensPair.RefreshToken) != nil {
-		c.JSON(401, gin.H{"error": "invalid refresh token"})
-		return
-	} else if !IsHashExistsInDB(tokenClaims.RFTokenHash) {
-		c.JSON(401, gin.H{"error": "no such refresh token in db"})
-		return
-	}
 
-	c.IndentedJSON(200, GenerateTokens(tokenClaims.UserID))
+    if err != nil {
+        c.JSON(401, gin.H{"error": "invalid access token"})
+        return
+    } else if bcrypt.CompareHashAndPassword(tokenClaims.RFTokenHash, tokensPair.RefreshToken) != nil {
+        c.JSON(401, gin.H{"error": "invalid refresh token"})
+        return
+    } else if !IsHashExistsInDB(tokenClaims.RFTokenHash) {
+        c.JSON(401, gin.H{"error": "no such refresh token in db"})
+        return
+    }
+
+    c.IndentedJSON(200, GenerateTokens(tokenClaims.UserID))
 }
 ```
+
