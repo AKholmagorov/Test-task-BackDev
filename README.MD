@@ -1,3 +1,6 @@
+> [!TIP]
+> Useful information that users should know, even when skimming content.
+
 # Проверка маршрутов
 ## Примечание 
 На локальной машине должен быть запущен MongoDB по адресу http://localhost:27017
